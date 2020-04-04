@@ -1,6 +1,6 @@
 # mysql笔记
 
-## 1.基础架构
+## 1、基础架构
 
 ### 1.1、问题：
 
@@ -98,7 +98,124 @@ ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that 
 
 
 
+## 2、日志系统：
 
+### 2.1、问题：
+
+1. redo log的概念是什么? 为什么会存在.
+2. 什么是WAL(write-ahead log)机制, 好处是什么.
+3. redo log 为什么可以保证crash safe机制.
+4. binlog的概念是什么, 起到什么作用, 可以做crash safe吗? 
+5. binlog和redolog的不同点有哪些? 
+6. 物理一致性和逻辑一直性各应该怎么理解? 
+7. 执行器和innoDB在执行update语句时候的流程是什么样的?
+8. 如果数据库误操作, 如何执行数据恢复?
+9. 什么是两阶段提交, 为什么需要两阶段提交, 两阶段提交怎么保证数据库中两份日志间的逻辑一致性(什么叫逻辑一致性)?
+10. 如果不是两阶段提交, 先写redo log和先写bin log两种情况各会遇到什么问题?
+
+
+
+### 2.2、内容：
+
+#### 2.2.1、redo log（重做日志， redo log 是 InnoDB 引擎特有的日志）
+
+最根本的思路是：**MySQL 里经常说到的 WAL 技术，WAL 的全称是 Write-Ahead Logging，它的关键点就是先写日志，再写磁盘**
+
+具体来说，当有一条记录需要更新的时候，InnoDB 引擎就会先把记录写到 redo log（粉板）里面，并更新内存，这个时候更新就算完成了。同时，InnoDB 引擎会在适当的时候，将这个操作记录更新到磁盘里面，而这个更新往往是在系统比较空闲的时候做，**InnoDB 的 redo log 是固定大小的**。
+
+##### 2.2.1.1、crash-safe
+
+**主要作用：**InnoDB 就可以保证即使数据库发生异常重启，之前提交的记录都不会丢失
+
+![img](https://static001.geekbang.org/resource/image/16/a7/16a7950217b3f0f4ed02db5db59562a7.png)
+
+write pos 是当前记录的位置，一边写一边后移，写到第 3 号文件末尾后就回到 0 号文件开头。checkpoint 是当前要擦除的位置，也是往后推移并且循环的，擦除记录前要把记录更新到数据文件。
+
+#### 2.2.2、binlog（归档日志，Server 层）
+
+因为最开始 MySQL 里并没有 InnoDB 引擎。MySQL 自带的引擎是 MyISAM，但是 MyISAM 没有 crash-safe 的能力，**binlog 日志只能用于归档**
+
+
+
+#### 2.2.3、两种日志的不同之处
+
+1. redo log 是 InnoDB 引擎特有的；binlog 是 MySQL 的 Server 层实现的，所有引擎都可以使用。
+2. redo log 是物理日志，记录的是“在某个数据页上做了什么修改”；binlog 是逻辑日志，记录的是这个语句的原始逻辑，比如“给 ID=2 这一行的 c 字段加 1 ”。
+3. redo log 是循环写的，空间固定会用完；binlog 是可以追加写入的。“追加写”是指 binlog 文件写到一定大小后会切换到下一个，并不会覆盖以前的日志。
+
+
+
+#### 2.2.4、执行update语句的内部流程
+
+##### **2.2.4.1、流程图：**
+
+图中浅色框表示是在 InnoDB 内部执行的，深色框表示是在执行器中执行的。
+
+![img](https://static001.geekbang.org/resource/image/2e/be/2e5bff4910ec189fe1ee6e2ecc7b4bbe.png)
+
+**具体流程**：
+
+1. 执行器先找引擎取 ID=2 这一行。ID 是主键，引擎直接用树搜索找到这一行。如果 ID=2 这一行所在的数据页本来就在内存中，就直接返回给执行器；否则，需要先从磁盘读入内存，然后再返回。
+2. 执行器拿到引擎给的行数据，把这个值加上 1，比如原来是 N，现在就是 N+1，得到新的一行数据，再调用引擎接口写入这行新数据。
+3. 引擎将这行新数据更新到内存中，同时将这个更新操作记录到 redo log 里面，此时 redo log 处于 prepare 状态。然后告知执行器执行完成了，随时可以提交事务。
+4. 执行器生成这个操作的 binlog，并把 binlog 写入磁盘。
+5. 执行器调用引擎的提交事务接口，引擎把刚刚写入的 redo log 改成提交（commit）状态，更新完成。
+
+
+
+##### 2.2.4.2、两阶段提交
+
+**redo log 和 binlog 都可以用于表示事务的提交状态，而两阶段提交就是让这两个状态保持逻辑上的一致。**
+
+### 2.3、总结
+
+mysql的重要的两个日志，物理日志 redo log 和逻辑日志 binlog。
+
+redo log 用于保证 crash-safe 能力。innodb_flush_log_at_trx_commit 这个参数设置成 1 的时候，表示每次事务的 redo log 都直接持久化到磁盘。这个参数我建议你设置成 1，这样可以保证 MySQL 异常重启之后数据不丢失。
+
+**innodb_flush_log_at_trx_commit** **（默认值为1）**
+
+- 要完全符合ACID，必须使用默认设置1。日志在每次事务提交时写入并刷新到磁盘。
+- 设置为0时，每秒写入一次日志并将其刷新到磁盘。尚未刷新日志的事务可能会在崩溃中丢失。
+- 设置为2时，在每次事务提交后写入日志，并每秒刷新一次到磁盘。尚未刷新日志的事务可能会在崩溃中丢失。
+
+**日志的刷新间隔时间**：**innodb_flush_log_at_timeout（默认值为1）**
+
+日志刷新频率由来控制 [`innodb_flush_log_at_timeout`](https://dev.mysql.com/doc/refman/8.0/en/innodb-parameters.html#sysvar_innodb_flush_log_at_timeout)，可让您将日志刷新频率设置为 N秒（其中 *`N`*为`1 ... 2700`，默认值为1）。但是，任何 [**mysqld**](https://dev.mysql.com/doc/refman/8.0/en/mysqld.html)进程崩溃都可能擦除多达 N几秒钟的事务。
+
+每秒钟写入并刷新日志*`N`* 。 [`innodb_flush_log_at_timeout`](https://dev.mysql.com/doc/refman/8.0/en/innodb-parameters.html#sysvar_innodb_flush_log_at_timeout) 允许增加两次刷新之间的超时时间，以减少刷新并避免影响二进制日志组提交的性能。默认设置为 [`innodb_flush_log_at_timeout`](https://dev.mysql.com/doc/refman/8.0/en/innodb-parameters.html#sysvar_innodb_flush_log_at_timeout) 每秒一次。
+
+```sql
+--查询Redo Log
+show variables like 'innodb_flush_log_at_trx_commit';
+
+--修改 innodb_flush_log_at_trx_commit为0、 1、 2
+set global innodb_flush_log_at_trx_commit=2;
+--修改innodb_flush_log_at_timeout同上
+
+```
+
+
+
+**sync_binlog （默认值为1）**
+
+这个参数设置成 1 的时候，表示每次事务的 binlog 都持久化到磁盘。这个参数我也建议你设置成 1，这样可以保证 MySQL 异常重启之后 binlog 不丢失。
+
+控制MySQL服务器将二进制日志同步到磁盘的频率。
+
+- [`sync_binlog=0`](https://dev.mysql.com/doc/mysql-replication-excerpt/8.0/en/replication-options-binary-log.html#sysvar_sync_binlog)：禁用MySQL服务器将二进制日志同步到磁盘的功能。取而代之的是，MySQL服务器依靠操作系统不时地将二进制日志刷新到磁盘上，就像处理其他任何文件一样。此设置提供最佳性能，但是在电源故障或操作系统崩溃的情况下，服务器可能提交了尚未同步到二进制日志的事务。
+- [`sync_binlog=1`](https://dev.mysql.com/doc/mysql-replication-excerpt/8.0/en/replication-options-binary-log.html#sysvar_sync_binlog)：（**默认的值**）启用在提交事务之前将二进制日志同步到磁盘。这是最安全的设置，但由于磁盘写入次数增加，可能会对性能产生负面影响。如果出现电源故障或操作系统崩溃，二进制日志中缺少的事务将仅处于准备状态。这允许自动恢复例程回滚事务，从而保证二进制日志中不会丢失任何事务。
+- [`sync_binlog=*`N`*`](https://dev.mysql.com/doc/mysql-replication-excerpt/8.0/en/replication-options-binary-log.html#sysvar_sync_binlog)，（最大值为4294967295）其中*`N`*的值不是0或1：是`N`二进制日志提交组已收集之后，二进制日志将同步到磁盘 。在电源故障或操作系统崩溃的情况下，服务器可能提交了尚未刷新到二进制日志的事务。由于磁盘写入次数的增加，此设置可能会对性能产生负面影响。较高的值可以提高性能，但会增加数据丢失的风险。
+
+```sql
+--查询sync_binlog状态
+show variables like '%sync_binlog%';
+
+--设置sync_binlog状态
+set global sync_binlog=0;
+
+
+```
 
 
 
