@@ -219,11 +219,195 @@ set global sync_binlog=0;
 
 
 
+## 3、事务隔离
+
+### 3.1、问题：
+
+1. 事务的概念是什么?
+2. mysql的事务隔离级别读未提交, 读已提交, 可重复读, 串行各是什么意思?
+3. 
+  读已提交, 可重复读是怎么通过视图构建实现的?
+4. 
+  可重复读的使用场景举例? 对账的时候应该很有用?
+5. 
+  事务隔离是怎么通过read-view(读视图)实现的?
+6. 
+  并发版本控制(MCVV)的概念是什么, 是怎么实现的?
+7. 
+  使用长事务的弊病? 为什么使用常事务可能拖垮整个库?
+8. 
+  事务的启动方式有哪几种? 
+9. 
+  commit work and chain的语法是做什么用的? 
+10. 
+  怎么查询各个表中的长事务?
+11. 
+   如何避免长事务的出现?
 
 
 
+### 3.2、内容：
+
+#### 3.2.1、隔离级别
+
+在谈隔离级别之前，你首先要知道，你隔离得越严实，效率就会越低。因此很多时候，我们都要在二者之间寻找一个平衡点。SQL 标准的事务隔离级别包括：读未提交（read uncommitted）、读提交（read committed）、可重复读（repeatable read）和串行化（serializable ）。下面我逐一为你解释：
+
+- 读未提交是指，一个事务还没提交时，它做的变更就能被别的事务看到。
+- 读提交是指，一个事务提交之后，它做的变更才会被其他事务看到。
+- 可重复读是指，一个事务执行过程中看到的数据，总是跟这个事务在启动时看到的数据是一致的。当然在可重复读隔离级别下，未提交变更对其他事务也是不可见的。
+- 串行化，顾名思义是对于同一行记录，“写”会加“写锁”，“读”会加“读锁”。当出现读写锁冲突的时候，后访问的事务必须等前一个事务执行完成，才能继续执行。
+
+**总结：**
+
+- 读未提交：别人改数据的事务尚未提交，我在我的事务中也能读到。
+- 读已提交：别人改数据的事务已经提交，我在我的事务中才能读到。
+- 可重复读：别人改数据的事务已经提交，我在我的事务中也不去读。
+- 串行：我的事务尚未提交，别人就别想改数据。
+
+这4种隔离级别，并行性能依次降低，安全性依次提高。
+
+```sql
+事务隔离级别						脏读			不可重复读		 幻读
+
+读未提交（READ UNCOMMITTED）		 是				是			  是
+读已提交（READ COMMITTED）					     是			   是
+可重复读（REPEATABLE READ）									    是
+串行化
+--查询当前会话的事物隔离级别
+SELECT @@transaction_isolation;
+--查询系统的当前会话事物隔离级别
+select @@global.transaction_isolation;
+
+--读未提交事务（修改系统的把session 改为global）
+set session transaction isolation level read uncommitted;
+
+--读已提交
+set session transaction isolation level read committed;
+--可重复读
+set session transaction isolation level repeatable read;
+```
 
 
+
+**注意：**
+
+Oracle 数据库的默认隔离级别其实就是“读提交”，因此对于一些从 Oracle 迁移到 MySQL 的应用，为保证数据库隔离级别的一致，你一定要记得将 MySQL 的隔离级别设置为“**读提交**”。
+
+#### 3.2.2、事务隔离级别的实现
+
+InnoDB的MVCC，是通过每行记录后面的保存的两个隐藏的列来实现的。一个是保存了行的创建时间，一个是保存行的过期时间（或删除时间）。当然存储的并不是实际的时间值而是系统的版本号。每开始一个新的事务，系统版本都会自动递增。事务开始的时刻的系统版本号会作为事务的版本号，用来和查询到的每行记录的版本号进行比较。
+
+
+
+#### 3.2.3、事务的启动方式
+
+MySQL 的事务启动方式有以下几种：
+
+1. 显式启动事务语句， begin 或 start transaction。配套的提交语句是 commit，回滚语句是 rollback。
+2. set autocommit=0，这个命令会将这个线程的自动提交关掉。意味着如果你只执行一个 select 语句，这个事务就启动了，而且并不会自动提交。这个事务持续存在直到你主动执行 commit 或 rollback 语句，或者断开连接。
+
+**导致长事务的原因：**
+
+有些客户端连接框架会默认连接成功后先执行一个 set autocommit=0 的命令。这就导致接下来的查询都在事务中，如果是长连接，就导致了意外的长事务。
+
+
+
+**默认情况下，客户端连接以[`autocommit`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_autocommit)设置为1 开始**，如果设置为0，则必须使用 [`COMMIT`](https://dev.mysql.com/doc/refman/8.0/en/commit.html)接受交易或[`ROLLBACK`](https://dev.mysql.com/doc/refman/8.0/en/commit.html) 取消交易。如果[`autocommit`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_autocommit) 为0，并将其更改为1，则MySQL会自动执行 [`COMMIT`](https://dev.mysql.com/doc/refman/8.0/en/commit.html)所有未清事务
+
+```sql
+--设置提交事务方式
+--全局的设置
+[mysqld]
+autocommit=0
+
+--会话的设置
+SET autocommit=0;
+```
+
+
+
+**解决方法：**
+
+使用 set autocommit=1 的情况下，用 begin 显式启动的事务，如果执行 commit 则提交事务。如果执行 commit work and chain，则是**提交事务并自动启动下一个事务**，这样也省去了再次执行 begin 语句的开销。同时带来的好处是从程序开发的角度明确地知道每个语句是否处于事务中。（如果执行commit work and chain会在每个事务开始时少一次begin）
+
+```sql
+--启动显示事务的命令
+BEGIN [WORK]
+COMMIT [WORK] [AND [NO] CHAIN] [[NO] RELEASE]
+ROLLBACK [WORK] [AND [NO] CHAIN] [[NO] RELEASE]
+SET autocommit = {0 | 1}
+
+--你可以在 information_schema 库的 innodb_trx 这个表中查询长事务，比如下面这个语句，用于查找持续时间超过 60s 的事务。
+
+select * from information_schema.innodb_trx where TIME_TO_SEC(timediff(now(),trx_started))>60
+
+```
+
+
+
+## 4、索引
+
+### 4.1、问题
+
+
+
+### 4.2、内容：
+
+**意义：索引的出现其实就是为了提高数据查询的效率，就像书的目录一样。**
+
+
+
+#### 4.2.1、索引的常见模型
+
+- **哈希表：**
+
+  哈希表这种结构适用于只有等值查询的场景
+
+  哈希冲突的处理方法：链表
+
+  
+
+- **有序数组：**
+
+  有序数组索引只适用于静态存储引擎
+
+  查询快，更新慢
+
+  
+
+- **二叉搜索树：**
+
+  每个节点的左儿子小于父节点，父节点又小于右儿子，
+
+  查询时间复杂度O(log(N))，更新时间复杂度O(log(N))
+
+#### 4.2.3、索引模型
+
+**InnoDB 使用了 B+ 树索引模型，**所以数据都是存储在 B+ 树中的。每一个索引在 InnoDB 里面对应一棵 B+ 树。
+
+**索引类型：**
+
+分为主键索引和非主键索引。
+
+- 主键索引的叶子节点存的是整行数据。在 InnoDB 里，主键索引也被称为**聚簇索引**（clustered index）。
+- 非主键索引的叶子节点内容是主键的值。在 InnoDB 里，非主键索引也被称为**二级索引**（secondary index）。
+
+**索引的区别：**
+
+主键索引和普通索引的区别：主键索引只要搜索ID这个B+Tree即可拿到数据。普通索引先搜索索引拿到主键值，再到主键索引树搜索一次(回表)
+
+#### 4.2.4、索引的维护
+
+**显然，主键长度越小，普通索引的叶子节点就越小，普通索引占用的空间也就越小。**
+
+**B+ 树为了维护索引有序性的内部变化：**
+
+一个数据页满了，按照B+Tree算法，新增加一个数据页，叫做页分裂，会导致性能下降。空间利用率降低大概50%。当相邻的两个数据页利用率很低的时候会做数据页合并，合并的过程是分裂过程的逆过程。
+
+主键索引的应用场景满足的条件：
+
+1. **只有一个索引；**
+2. **该索引必须是唯一索引。**
 
 
 
