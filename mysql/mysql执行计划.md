@@ -313,10 +313,13 @@ SELECT * FROM `test` WHERE`value` = 7
 最左匹配原则：
 如果加了 value,phone 为组合索引
 则查询语句会执行从左向右完全匹配，如果查询条件没有value,phone 这个两个同时出现，或者value单独出现，只有age则不会命中索引
+查询语句的where里面各个判断调换顺序没关系的
 
 SELECT name FROM `test`  where `value` = 6 (命中)
 
 SELECT name FROM `test`  where `value` = 6 AND phone = 124234325355 （命中）
+
+SELECT name FROM `test`  where  phone = 124234325355 and `value` = 6（命中）
 
 SELECT name FROM `test`  where `value` = 6 and name = ''（命中）
 
