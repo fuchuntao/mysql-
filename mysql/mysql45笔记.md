@@ -221,6 +221,8 @@ set global sync_binlog=0;
 
 ## 3、事务隔离
 
+事务隔离可以参考：https://mp.weixin.qq.com/s?__biz=MzAxOTc0NzExNg==&mid=2665514468&idx=1&sn=7e62cc31ea0849d99bd30dec6d0b291f&chksm=80d67da7b7a1f4b1d4f34c80e565566c427e00b5bfa97aad05f36d2266baf69a8d3f002243d2&mpshare=1&scene=1&srcid=0416e6NsRMR2wSNIQHu1sjrY&sharer_sharetime=1578456375794&sharer_shareid=9f8d8535bcc8066cc734d87ec668425e&key=7530264ccf69a99b1b5c2640b873746bc4c38a8885fb26160a513a7b18d4e6125d94e28005d82acadd18b9b5557a217d2092f420abb4def2d24ef6d08df8e2ba704ea1476a0f621b14ead670f27dc651&ascene=1&uin=NjEzNjAzNDU%3D&devicetype=Windows+10&version=62070158&lang=zh_CN&exportkey=AVZ5Wtfj8%2Bqz%2FbF753RsweU%3D&pass_ticket=yNqxQoTmGGyi73%2BB15l69K7muijjXSMl%2BvEfxLmMlPE%3D
+
 ### 3.1、问题：
 
 1. 事务的概念是什么?
@@ -234,7 +236,7 @@ set global sync_binlog=0;
 6. 
   并发版本控制(MCVV)的概念是什么, 是怎么实现的?
 7. 
-  使用长事务的弊病? 为什么使用常事务可能拖垮整个库?
+  使用长事务的弊病? 为什么使用长事务可能拖垮整个库?
 8. 
   事务的启动方式有哪几种? 
 9. 
@@ -326,7 +328,7 @@ MySQL 的事务启动方式有以下几种：
 
 
 
-**默认情况下，客户端连接以[`autocommit`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_autocommit)设置为1 开始**，如果设置为0，则必须使用 [`COMMIT`](https://dev.mysql.com/doc/refman/8.0/en/commit.html)接受交易或[`ROLLBACK`](https://dev.mysql.com/doc/refman/8.0/en/commit.html) 取消交易。如果[`autocommit`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_autocommit) 为0，并将其更改为1，则MySQL会自动执行 [`COMMIT`](https://dev.mysql.com/doc/refman/8.0/en/commit.html)所有未清事务
+**默认情况下，客户端连接以[`autocommit`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_autocommit)设置为1 开始**，**自动提交事务**，如果设置为0，则必须使用 [`COMMIT`](https://dev.mysql.com/doc/refman/8.0/en/commit.html)接受交易或[`ROLLBACK`](https://dev.mysql.com/doc/refman/8.0/en/commit.html) 取消交易。如果[`autocommit`](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_autocommit) 为0，并将其更改为1，则MySQL会自动执行 [`COMMIT`](https://dev.mysql.com/doc/refman/8.0/en/commit.html)所有未清事务
 
 ```sql
 --设置提交事务方式
@@ -356,6 +358,77 @@ SET autocommit = {0 | 1}
 select * from information_schema.innodb_trx where TIME_TO_SEC(timediff(now(),trx_started))>60
 
 ```
+
+
+
+1.innodb支持RC和RR隔离级别实现是用的一致性视图(consistent read view)
+
+2.事务在启动时会拍一个快照,这个快照是基于整个库的.
+基于整个库的意思就是说一个事务内,整个库的修改对于该事务都是不可见的(对于快照读的情况)
+如果在事务内select t表,另外的事务执行了DDL t表,根据发生时间,要嘛锁住要嘛报错(参考第六章)
+
+3.事务是如何实现的MVCC呢?
+(1)每个事务都有一个事务ID,叫做transaction id(严格递增)
+(2)事务在启动时,找到已提交的最大事务ID记为up_limit_id。
+(3)事务在更新一条语句时,比如id=1改为了id=2.会把id=1和该行之前的row trx_id写到undo log里,
+并且在数据页上把id的值改为2,并且把修改这条语句的transaction id记在该行行头
+(4)再定一个规矩,一个事务要查看一条数据时,必须先用该事务的up_limit_id与该行的transaction id做比对,
+如果up_limit_id>=transaction id,那么可以看.如果up_limit_id<transaction id,则只能去undo log里去取。去undo log查找数据的时候,也需要做比对,必须up_limit_id>transaction id,才返回数据
+
+4.什么是当前读,由于当前读都是先读后写,只能读当前的值,所以为当前读.会更新事务内的up_limit_id为该事务的transaction id
+
+5.为什么rr能实现可重复读而rc不能,分两种情况
+(1)快照读的情况下,rr不能更新事务内的up_limit_id,
+    而rc每次会把up_limit_id更新为快照读之前最新已提交事务的transaction id,则rc不能可重复读
+(2)当前读的情况下,rr是利用record lock+gap lock来实现的,而rc没有gap,所以rc不能可重复读
+
+
+答案：
+      分析： 假设有两个事务A和B， 且A事务是更新c=0的事务； 给定条件： 1， 事务A update 语句已经执行成功， 说明没有另外一个活动中的事务在执行修改条件为id in 1,2,3,4或c in 1,2,3,4, 否则update会被锁阻塞； 2，事务A再次执行查询结果却是一样， 说明什么？说明事务B把id或者c给修改了， 而且已经提交了， 导致事务A“当前读”没有匹配到对应的条件； 事务A的查询语句说明了事务B执行更新后，提交事务B一定是在事务A第一条查询语句之后执行的；
+
+所以执行顺序应该是：
+1， 事务A select * from t;
+2, 事务B update t set c = c + 4; // 只要c或者id大于等于5就行; 当然这行也可以和1调换， 不影响
+3, 事务B commit;
+4, 事务A update t set c = 0 where id = c; // 当前读； 此时已经没有匹配的行
+5， 事务A select * from t;
+
+
+这两天反复读这篇文章，想到一个业务上的问题：减库存的场景
+当前库存：num=200
+假如多线程并发：
+AB同时开启事务，A先请求到行锁，
+A：
+start transaction;
+select num from t where num>0;先查询当前库存值（num>0）
+update t set num=num-200; 库存减量
+
+B：
+start transaction;
+select num from t where num>0;先查询当前库存值（num>0）
+update t set num=num-200; 库存减量
+----结果---
+A：查询到num=200,做了库存减量成了0
+B：事务启动后，查询到也是200，等 A 释放了行锁，B进行update，直接变成 -200
+但是 B 查询时，时有库存的，因此才减库存，结果变成负的。
+老师，对于这种场景，怎么避免减成负值？
+给 select 加读锁或者写锁吗 ？这种select 加锁，对业务影响大吗？
+
+答：
+比较简单的做法是update语句的where 部分加一个条件： where nun >=200 .
+然后在程序里判断这个update 语句的affected_rows,
+如果等于1 那就是符合预期；
+如果等于0，那表示库存不够减了，业务要处理一下去，比如提示“库存不足”
+
+**原来在同一行数据，最新版本的 row trx_id 是可能会小于旧版本的 row trx_id的**
+
+
+
+
+
+
+
+
 
 
 
