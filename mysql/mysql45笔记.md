@@ -21,7 +21,7 @@
 
 MySQL 可以分为 Server 层和存储引擎层两部分
 
-![img](https://static001.geekbang.org/resource/image/0d/d9/0d2070e8f84c4801adbfa03bda1f98d9.png)
+![img](../IMG/0d2070e8f84c4801adbfa03bda1f98d9.png)
 
 
 
@@ -127,7 +127,7 @@ ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that 
 
 **主要作用：**InnoDB 就可以保证即使数据库发生异常重启，之前提交的记录都不会丢失
 
-![img](https://static001.geekbang.org/resource/image/16/a7/16a7950217b3f0f4ed02db5db59562a7.png)
+![img](../IMG/16a7950217b3f0f4ed02db5db59562a7.png)
 
 write pos 是当前记录的位置，一边写一边后移，写到第 3 号文件末尾后就回到 0 号文件开头。checkpoint 是当前要擦除的位置，也是往后推移并且循环的，擦除记录前要把记录更新到数据文件。
 
@@ -151,7 +151,7 @@ write pos 是当前记录的位置，一边写一边后移，写到第 3 号文�
 
 图中浅色框表示是在 InnoDB 内部执行的，深色框表示是在执行器中执行的。
 
-![img](https://static001.geekbang.org/resource/image/2e/be/2e5bff4910ec189fe1ee6e2ecc7b4bbe.png)
+![img](../IMG/2e5bff4910ec189fe1ee6e2ecc7b4bbe.png)
 
 **具体流程**：
 
@@ -226,25 +226,51 @@ set global sync_binlog=0;
 ### 3.1、问题：
 
 1. 事务的概念是什么?
+
 2. mysql的事务隔离级别读未提交, 读已提交, 可重复读, 串行各是什么意思?
+
 3. 
   读已提交, 可重复读是怎么通过视图构建实现的?
+  
 4. 
   可重复读的使用场景举例? 对账的时候应该很有用?
+  
 5. 
   事务隔离是怎么通过read-view(读视图)实现的?
+  
 6. 
   并发版本控制(MCVV)的概念是什么, 是怎么实现的?
+  
 7. 
   使用长事务的弊病? 为什么使用长事务可能拖垮整个库?
+  
 8. 
   事务的启动方式有哪几种? 
+  
 9. 
   commit work and chain的语法是做什么用的? 
+  
 10. 
   怎么查询各个表中的长事务?
-11. 
-   如何避免长事务的出现?
+  
+11. 如何避免长事务的出现?
+
+12. **数据无法修改的问题**
+
+   ![Snipaste_2020-05-05_17-58-11](../IMG/Snipaste_2020-05-05_17-58-11.png)
+
+   场景一
+
+   ![img](../IMG/be7a4d8af04cdf93aaa11108933559ae.png)
+   这样，session A看到的就是我截图的效果了。
+
+   场景二
+
+   ![img](../IMG/e24a0689571337959138d787c408defa.png)
+
+   用新的方式来分析session B’的更新为什么对session A不可见就是：在session A视图数组创建的瞬间，session B’是活跃的，属于“版本未提交，不可见”这种情况。
+
+
 
 
 
@@ -295,11 +321,21 @@ set session transaction isolation level repeatable read;
 
 Oracle 数据库的默认隔离级别其实就是“读提交”，因此对于一些从 Oracle 迁移到 MySQL 的应用，为保证数据库隔离级别的一致，你一定要记得将 MySQL 的隔离级别设置为“**读提交**”。
 
+一个数据版本，对于一个事务视图来说，除了自己的更新总是可见以外，有三种情况：
+
+1. **版本未提交，不可见；**
+2. **版本已提交，但是是在视图创建后提交的，不可见；**
+3. **版本已提交，而且是在视图创建前提交的，可见。**
+
+**更新数据都是先读后写的，而这个读，只能读当前的值，称为“当前读”（current read）。**
+
+
+
 #### 3.2.2、事务隔离级别的实现
 
 InnoDB的MVCC，是通过每行记录后面的保存的两个隐藏的列来实现的。一个是保存了行的创建时间，一个是保存行的过期时间（或删除时间）。当然存储的并不是实际的时间值而是系统的版本号。每开始一个新的事务，系统版本都会自动递增。事务开始的时刻的系统版本号会作为事务的版本号，用来和查询到的每行记录的版本号进行比较。
 
-![img](https://static001.geekbang.org/resource/image/7d/f8/7dea45932a6b722eb069d2264d0066f8.png)
+![img](../IMG/7dea45932a6b722eb069d2264d0066f8.png)
 
 
 
@@ -679,11 +715,99 @@ select * from tuser where name like '张%' and age=10 and ismale=1;
 
 MySQL 5.6之前没有索引下推（图1）
 
-![img](https://static001.geekbang.org/resource/image/b3/ac/b32aa8b1f75611e0759e52f5915539ac.jpg)
+![img](../IMG/b32aa8b1f75611e0759e52f5915539ac.jpg)
 
 MySQL 5.6 引入的索引下推优化（图2）
 
-![img](https://static001.geekbang.org/resource/image/76/1b/76e385f3df5a694cc4238c7b65acfe1b.jpg)
+![img](../IMG/76e385f3df5a694cc4238c7b65acfe1b.jpg)
+
+#### 4.2.6、索引的选择
+
+普通索引会用到change buffer，唯一索引不适用（**所有的更新操作都要先判断这个操作是否违反唯一性约束**，**会导致更新操作的时候数据会读入内存中，导致直接更新内存要快**）
+
+##### 4.2.6.1、change buffer
+
+change buffer用的是buffer pool里的内存，因此不能无限增大，change buffer的大小，可以通过参数**innodb_change_buffer_max_size**来动态设置。这个参数设置为50的时候，表示change buffer的大小最多只能占用buffer pool的50%。
+
+**定义：**
+
+当需要更新一个数据页时，如果数据页在内存中就直接更新，而如果这个数据页还没有在内存中的话，在不影响数据一致性的前提下，InooDB会将这些更新操作缓存在change buffer中，这样就不需要从磁盘中读入这个数据页了。在下次**查询需要访问这个数据页的时候，将数据页读入内存，然后执行change buffer中与这个页有关的操作**。通过这种方式就能保证这个数据逻辑的正确性。
+
+
+
+需要说明的是，虽然名字叫作change buffer，实际上它是可以持久化的数据。也就是说，change buffer在内存中有拷贝，也会被写入到磁盘上。
+
+将change buffer中的操作应用到原数据页，得到最新结果的过程称为merge。除了访问这个数据页会触发merge外，系统有后台线程会定期merge。在数据库正常关闭（shutdown）的过程中，也会执行merge操作。
+
+**好处：随机读磁盘的IO消耗**
+
+如果能够将更新操作先记录在change buffer，减少读磁盘，语句的执行速度会得到明显的提升。而且，数据读入内存是需要占用buffer pool的，所以这种方式还能**够避免占用内存，提高内存利用率**。
+
+**如何使用：**
+
+**这个记录要更新的目标页不在内存中**，
+
+- 对于唯一索引来说，需要将数据页读入内存，判断到没有冲突，插入这个值，语句执行结束；
+- 对于普通索引来说，则是将更新记录在change buffer，语句执行就结束了。
+
+将数据从磁盘读入内存涉及随机IO的访问，是数据库里面成本最高的操作之一。change buffer因为减少了随机磁盘访问，所以对更新性能的提升是会很明显的。
+
+
+
+##### 4.2.6.2、change buffer 和 redo log的区别
+
+
+
+k1所在的数据页在内存(InnoDB buffer pool)中，k2所在的数据页不在内存中。如图2所示是带change buffer的更新状态图。
+
+![img](../IMG/980a2b786f0ea7adabef2e64fb4c4ca3.png)
+
+图中分为：内存、redo log（ib_log_fileX）、 数据表空间（t.ibd）、系统表空间（ibdata1）。
+
+这条更新语句做了如下的操作（按照图中的数字顺序）：
+
+1. Page 1在内存中，直接更新内存；
+2. Page 2没有在内存中，就在内存的change buffer区域，记录下“我要往Page 2插入一行”这个信息
+3. 将上述两个动作记入redo log中（图中3和4）。
+
+做完上面这些，事务就可以完成了。所以，你会看到，执行这条更新语句的成本很低，就是写了两处内存，然后写了一处磁盘（两次操作合在一起写了一次磁盘），而且还是顺序写的。
+
+同时，图中的两个虚线箭头，是后台操作，不影响更新的响应时间。
+
+比如：我们现在要执行 select * from t where k in (k1, k2)。这里，我画了这两个读请求的流程图。
+
+如果读语句发生在更新语句后不久，内存中的数据都还在，那么此时的这两个读操作就与系统表空间（ibdata1）和 redo log（ib_log_fileX）无关了。所以，我在图中就没画出这两部分。
+
+![img](../IMG/6dc743577af1dbcbb8550bddbfc5f98e.png)
+
+
+
+1. 读Page 1的时候，直接从内存返回。有几位同学在前面文章的评论中问到，WAL之后如果读数据，是不是一定要读盘，是不是一定要从redo log里面把数据更新以后才可以返回？其实是不用的。你可以看一下图3的这个状态，虽然磁盘上还是之前的数据，但是这里直接从内存返回结果，结果是正确的。
+2. 要读Page 2的时候，需要把Page 2从磁盘读入内存中，然后应用change buffer里面的操作日志，生成一个正确的版本并返回结果。
+
+可以看到，直到需要读Page 2的时候，这个数据页才会被读入内存。
+
+所以，如果要简单地对比这两个机制在提升更新性能上的收益的话，**redo log 主要节省的是随机写磁盘的IO消耗（转成顺序写），而change buffer主要节省的则是随机读磁盘的IO消耗。**
+
+
+
+##### 4.2.6.3、merge
+
+![](../IMG/Snipaste_2020-05-05_18-56-58.png)
+
+
+
+1. 从磁盘读入数据页到内存（老版本的数据页）；
+2. 从change buffer里找出这个数据页的change buffer 记录(可能有多个），依次应用，得到新版数据页；
+3. 写redo log。这个redo log包含了数据的变更和change buffer的变更。
+
+到这里merge过程就结束了。这时候，数据页和内存中change buffer对应的磁盘位置都还没有修改，属于脏页，之后各自刷回自己的物理数据，就是另外一个过程了。
+
+
+
+
+
+
 
 
 
